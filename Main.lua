@@ -50,9 +50,9 @@ end;
 local GrabInt;
 local GrabSizeT;
 
-local FieldsPerFlush = 50;
+local FieldsPerFlush = 50; -- For OP_SETLIST
 
-local OpMode, OpMask = {
+local OpMode, OpMask = { -- OpCode Modes and Argument masks
 	'ABC',  'ABx', 'ABC',  'ABC',
 	'ABC',  'ABx', 'ABC',  'ABx',
 	'ABC',  'ABC', 'ABC',  'ABC',
@@ -76,12 +76,8 @@ local OpMode, OpMask = {
 	{ 'OpArgU', 'OpArgN' }, { 'OpArgU', 'OpArgN' },
 };
 
-local Position = 1;
+local Position = 1; -- Position 
 
---[[-----------------------------------------------------------------------
-	--* TODO: Fetch a byte from a bytecode string
-	--* param Source: The bytecode source provided
---------------------------------------------------------------------------]]
 local function GrabBits8(Source) -- Gets a byte from a source string
 	local Str = String_byte(Source, Position, Position);
 	
