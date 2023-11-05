@@ -257,11 +257,11 @@ local DeserializeLuaBinary; DeserializeLuaBinary = function(Bytecode)
 
 		Type = GrabBits8(Bytecode);
 
-		if Type == 1 then -- Lua needs switch statements
+		if Type == 1 then -- Booleans
 			Value = GrabBits8(Bytecode) ~= 0;
-		elseif Type == 3 then
+		elseif Type == 3 then -- Numbers
 			Value = GrabFloat64(Bytecode);
-		elseif Type == 4 then
+		elseif Type == 4 then -- Strings
 			Value = GrabFixedLengthString(Bytecode, GrabSizeT(Bytecode));
 			Value = String_sub(Value, 1, -2);
 		end;
@@ -273,20 +273,20 @@ local DeserializeLuaBinary; DeserializeLuaBinary = function(Bytecode)
 		local Instr       = Instrs[Idx];
 		local InstrOpMask = Instr.OpMask;
 
-		if InstrOpMask[1] == "OpArgK" then
+		if InstrOpMask[1] == "OpArgK" then -- Is B supposed to be a constant?
 			local ArgB = Instr.B;
 
-			if ArgB >= 256 then
+			if ArgB >= 256 then -- Is the value of B too high?
 				Instr.Const_B = Consts[ArgB - 255];
 			else
 				Instr.Const_B = Consts[ArgB];
 			end;
 		end;
 
-		if InstrOpMask[2] == "OpArgK" then
+		if InstrOpMask[2] == "OpArgK" then -- Is C supposed to be a constant?
 			local ArgC = Instr.C;
 
-			if ArgC >= 256 then
+			if ArgC >= 256 then -- Is the value of C too high?
 				Instr.Const_C = Consts[ArgC - 255];
 			else
 				Instr.Const_C = Consts[ArgC];
@@ -294,12 +294,12 @@ local DeserializeLuaBinary; DeserializeLuaBinary = function(Bytecode)
 		end;
 	end;
 
-	local ProtoCount = GrabInt(Bytecode);
+	local ProtoCount = GrabInt(Bytecode); -- # of protos (functions)
 
 	State.ProtoCount = ProtoCount;
 
 	for _ = 1, ProtoCount, 1 do
-		Table_insert(Protos, DeserializeLuaBinary());
+		Table_insert(Protos, DeserializeLuaBinary()); -- Use recursion to decode another function
 	end;
 
 	local LineCount = GrabInt(Bytecode);
@@ -341,100 +341,100 @@ local DeserializeLuaBinary; DeserializeLuaBinary = function(Bytecode)
 end;
 
 local function WrapLuaFunction(State, Environment, Upvals)
-	local Instrs     = State.Instrs;
-	local InstrCount = State.InstrCount;
-	local Consts     = State.Consts;
-	local Upvals     = Upvals or State.Upvals;
+	local Instrs     = State.Instrs; -- Function instructions
+	local InstrCount = State.InstrCount; -- Amount of instructions
+	local Consts     = State.Consts; -- Constants
+	local Upvals     = Upvals or State.Upvals; -- Upvalues
 
 	local PC       = 1; -- Program counter (the execution position)
 	local TopIndex = 0; -- The top index currently in the register
 
 	local UPVALUES = {}; -- Not implemented yet, so functions and other stuff will not work (YET)
-	local REGISTER = {}; 
+	local REGISTER = {}; -- Main program register, used to store data at runtime
 
-	local function SET_REGISTER(Index, Value)
+	local function SET_REGISTER(Index, Value) -- Sets a value to the register, and TopIndex if its higher than the old TopIndex
 		TopIndex = (Index > TopIndex) and Index or TopIndex; REGISTER[Index] = Value;
 	end;
 
-	local function MOVETABLETO_REGISTER(Table, StartIdx, EndIdx, PosIdx) -- Basically table.move but designed for REGISTER
+	local function MOVETABLETO_REGISTER(Table, StartIdx, EndIdx, PosIdx) -- Basically table.move but designed for the register
 		for Idx = 0, StartIdx - EndIdx, 1 do
 			TopIndex = (Idx > TopIndex) and Idx or TopIndex; REGISTER[PosIdx + Idx] = Table[StartIdx + PosIdx];
 		end;
 	end;
 
 	local function Execute(...)
-		while PC <= InstrCount do
-			local Instr  = Instrs[PC];
-			local OpCode = Instr.OpCode;
+		while PC <= InstrCount do -- If the program counter hasn't overshot, then...
+			local Instr  = Instrs[PC];   -- Get the current instruction
+			local OpCode = Instr.OpCode; -- Get the OpCode (the type of instruction to run)
 
-			-- Lua needs switch statements smh (!!messy if statement warning!!)
+			-- Lua needs switch statements smh
 
 			if OpCode == 1 then -- MOVE
-				SET_REGISTER(Instr.A, REGISTER[Instr.B]);
+				SET_REGISTER(Instr.A, REGISTER[Instr.B]); -- Move/Copy a register element to another register element
 			elseif OpCode == 2 then -- LOADK
-				SET_REGISTER(Instr.A, Instr.Const_B or Consts[Instr.B]);
+				SET_REGISTER(Instr.A, Instr.Const_B or Consts[Instr.B]); -- Load a constant value into the register
 			elseif OpCode == 3 then -- LOADBOOL
-				SET_REGISTER(Instr.A, Instr.B ~= 0);
+				SET_REGISTER(Instr.A, Instr.B ~= 0); -- Load a boolean value into the register
 
-				if (Instr.C ~= 0) then PC = PC + 1; end;
+				if (Instr.C ~= 0) then PC = PC + 1; end; -- If C =/= 0, then perform a jump by 1
 			elseif OpCode == 4 then -- LOADNIL
-				for Idx = Instr.A, Instr.B, 1 do SET_REGISTER(Idx, NIL); end;
+				for Idx = Instr.A, Instr.B, 1 do SET_REGISTER(Idx, NIL); end; -- Set a range of register indexes to nil
 			elseif OpCode == 5 then -- GETUPVAL
-				SET_REGISTER(Instr.A, Upvals[Instr.B]);
+				SET_REGISTER(Instr.A, Upvals[Instr.B]); -- Load an upvalue into the register
 			elseif OpCode == 6 then -- GETGLOBAL
-				SET_REGISTER(Instr.A, Environment[Instr.Const_B]);
+				SET_REGISTER(Instr.A, Environment[Instr.Const_B]); -- Load a global variable into the register
 			elseif OpCode == 7 then -- GETTABLE
-				SET_REGISTER(Instr.A, REGISTER[Instr.B][Instr.C]);
+				SET_REGISTER(Instr.A, REGISTER[Instr.B][Instr.C]); -- Load a table value into the register
 			elseif OpCode == 8 then -- SETGLOBAL
-				Environment[Instr.Const_B or Instr.B] = Consts[Instr.A];
+				Environment[Instr.Const_B or Instr.B] = Consts[Instr.A]; -- Set a global variable to a register field
 			elseif OpCode == 9 then -- SETUPVAL
-				Upvals[Instr.A] = REGISTER[Instr.B]; -- might be inverse, left this here for future notice
+				Upvals[Instr.B] = REGISTER[Instr.A]; -- Set an upvalue to a register field
 			elseif OpCode == 10 then -- SETTABLE
-				REGISTER[Instr.A][Instr.B] = REGISTER[Instr.C];
+				REGISTER[Instr.A][Instr.B] = REGISTER[Instr.C]; -- Set a table field to a register field
 			elseif OpCode == 11 then -- NEWTABLE
-				SET_REGISTER(Instr.A, {});
-			elseif OpCode == 12 then -- SELF
+				SET_REGISTER(Instr.A, {}); -- Load a new and blank table to the register
+			elseif OpCode == 12 then -- SELF (Used in OOP scenarios)
 				local A = Instr.A;
 				local B = REGISTER[Instr.B];
 
 				SET_REGISTER(A + 1, B);
 				SET_REGISTER(A, B[Instr.C]);
 			elseif OpCode == 13 then -- ADD
-				SET_REGISTER(Instr.A, (Instr.Const_B or REGISTER[Instr.B]) + (Instr.Const_C or REGISTER[Instr.C]));
+				SET_REGISTER(Instr.A, (Instr.Const_B or REGISTER[Instr.B]) + (Instr.Const_C or REGISTER[Instr.C])); -- Loads (RK(B) + RK(C)) into the register 
 			elseif OpCode == 14 then -- SUB
-				SET_REGISTER(Instr.A, (Instr.Const_B or REGISTER[Instr.B]) - (Instr.Const_C or REGISTER[Instr.C]));
+				SET_REGISTER(Instr.A, (Instr.Const_B or REGISTER[Instr.B]) - (Instr.Const_C or REGISTER[Instr.C])); -- Loads (RK(B) - RK(C)) into the register
 			elseif OpCode == 15 then -- MUL
-				SET_REGISTER(Instr.A, (Instr.Const_B or REGISTER[Instr.B]) * (Instr.Const_C or REGISTER[Instr.C]));
+				SET_REGISTER(Instr.A, (Instr.Const_B or REGISTER[Instr.B]) * (Instr.Const_C or REGISTER[Instr.C])); -- Loads (RK(B) * RK(C)) into the register
 			elseif OpCode == 16 then -- DIV
-				SET_REGISTER(Instr.A, (Instr.Const_B or REGISTER[Instr.B]) / (Instr.Const_C or REGISTER[Instr.C]));
+				SET_REGISTER(Instr.A, (Instr.Const_B or REGISTER[Instr.B]) / (Instr.Const_C or REGISTER[Instr.C])); -- Loads (RK(B) / RK(C)) into the register
 			elseif OpCode == 17 then -- MOD
-				SET_REGISTER(Instr.A, (Instr.Const_B or REGISTER[Instr.B]) % (Instr.Const_C or REGISTER[Instr.C]));
+				SET_REGISTER(Instr.A, (Instr.Const_B or REGISTER[Instr.B]) % (Instr.Const_C or REGISTER[Instr.C])); -- Loads (RK(B) % RK(C)) into the register
 			elseif OpCode == 18 then -- POW
-				SET_REGISTER(Instr.A, (Instr.Const_B or REGISTER[Instr.B]) ^ (Instr.Const_C or REGISTER[Instr.C]));
+				SET_REGISTER(Instr.A, (Instr.Const_B or REGISTER[Instr.B]) ^ (Instr.Const_C or REGISTER[Instr.C])); -- Loads (RK(B) ^ RK(C)) into the register
 			elseif OpCode == 19 then -- UNM
-				SET_REGISTER(Instr.A, -(Instr.Const_B or REGISTER[Instr.B]));
+				SET_REGISTER(Instr.A, -(Instr.Const_B or REGISTER[Instr.B])); -- Loads (-RK(B))) into the register
 			elseif OpCode == 20 then -- NOT
-				SET_REGISTER(Instr.A, not (Instr.Const_B or REGISTER[Instr.B]));
+				SET_REGISTER(Instr.A, not (Instr.Const_B or REGISTER[Instr.B])); -- Loads (not RK(B)) into the register
 			elseif OpCode == 21 then -- LEN
-				SET_REGISTER(Instr.A, #(Instr.Const_B or REGISTER[Instr.B]));
+				SET_REGISTER(Instr.A, #(Instr.Const_B or REGISTER[Instr.B])); -- Loads (#RK(B)) into the register
 			elseif OpCode == 22 then -- CONCAT
-				SET_REGISTER(Instr.A, (Instr.Const_B or REGISTER[Instr.B]) .. (Instr.Const_C or REGISTER[Instr.C]));
+				SET_REGISTER(Instr.A, (Instr.Const_B or REGISTER[Instr.B]) .. (Instr.Const_C or REGISTER[Instr.C])); -- Loads (RK(B) .. RK(C)) into the register
 			elseif OpCode == 23 then -- JMP
-				PC = PC + Instr.B;
+				PC = PC + Instr.B; -- Performs a conditional jump (B is signed (sBx), can be forwards or backwards)
 			elseif OpCode == 24 then -- EQ
-				if (Instr.Const_B or REGISTER[Instr.B]) == (Instr.Const_C or REGISTER[Instr.C]) then PC = PC + 1; end;
+				if (Instr.Const_B or REGISTER[Instr.B]) == (Instr.Const_C or REGISTER[Instr.C]) then PC = PC + 1; end; -- Performs == on RK(B) and RK(C), and if true perform a jump 
 			elseif OpCode == 25 then -- LT
-				if (Instr.Const_B or REGISTER[Instr.B]) < (Instr.Const_C or REGISTER[Instr.C]) then PC = PC + 1; end;
+				if (Instr.Const_B or REGISTER[Instr.B]) < (Instr.Const_C or REGISTER[Instr.C]) then PC = PC + 1; end; -- Performs < on RK(B) and RK(C), and if true perform a jump 
 			elseif OpCode == 26 then -- LE
-				if (Instr.Const_B or REGISTER[Instr.B]) <= (Instr.Const_C or REGISTER[Instr.C]) then PC = PC + 1; end;
+				if (Instr.Const_B or REGISTER[Instr.B]) <= (Instr.Const_C or REGISTER[Instr.C]) then PC = PC + 1; end; -- Performs <= on RK(B) and RK(C), and if true perform a jump 
 			elseif OpCode == 27 then -- TEST
-				if REGISTER[Instr.A] ~= (Instr.B ~= 0) then PC = PC + 1; end;
-			elseif OpCode == 28 then -- TESTSET
+				if REGISTER[Instr.A] ~= (Instr.B ~= 0) then PC = PC + 1; end; -- Performs a boolean test, and if true then perform a jump
+			elseif OpCode == 28 then -- TESTSET (Performs a boolean test, and if true then perform a jump AND sets a value to the register)
 				local A = Instr.A;
 				local B = REGISTER[Instr.B];
 
 				if B ~= (Instr.C ~= 0) then PC = PC + 1; else SET_REGISTER(A, B); end;
-			elseif OpCode == 29 then -- CALL
+			elseif OpCode == 29 then -- CALL (Calls a function from the register)
 				local A = Instr.A;
 				local B = Instr.B;
 				local C = Instr.C;
@@ -447,20 +447,20 @@ local function WrapLuaFunction(State, Environment, Upvals)
 				else
 					REGISTER[A](Table_unpack(REGISTER, A + 1, A + (B == 0 and (TopIndex - A) or B - 1)));
 				end;
-			elseif OpCode == 30 then -- TAILCALL
+			elseif OpCode == 30 then -- TAILCALL (performs a tailcall, a call with no set amount of returns)
 				local A = Instr.A;
 				local B = Instr.B;
 
 				local Returns = Table_pack(REGISTER[A](Table_unpack(REGISTER, A + 1, A + (B == 0 and (TopIndex - A) or B - 1))));
 
 				MOVETABLETO_REGISTER(Returns, 1, #Returns, TopIndex);
-			elseif OpCode == 31 then -- RETURN
+			elseif OpCode == 31 then -- RETURN (Returns either nil or a selected amount of values)
 				local B = Instr.B;
 
 				if B == 1 then return; end;
 
 				return Table_unpack(REGISTER, Instr.A, (B == 0 and TopIndex) or B - 1);
-			elseif OpCode == 32 then -- FORLOOP
+			elseif OpCode == 32 then -- FORLOOP (For loop handler instruction)
 				local A     = Instr.A;
 				local Start = REGISTER[A];
 				local End   = REGISTER[A + 1];
@@ -473,7 +473,7 @@ local function WrapLuaFunction(State, Environment, Upvals)
 					PC = PC + Instr.B;
 					REGISTER[A + 3] = Current;
 				end;
-			elseif OpCode == 33 then -- FORPREP
+			elseif OpCode == 33 then -- FORPREP (Checks if the for-loop arguments are valid and then prepares R(A))
 				local A     = Instr.A;
 				local Start = REGISTER[A];
 				local End   = REGISTER[A + 1];
@@ -487,7 +487,7 @@ local function WrapLuaFunction(State, Environment, Upvals)
 				REGISTER[A] = Start - Step;
 
 				PC = PC + Instr.B;
-			elseif OpCode == 34 then -- TFORLOOP
+			elseif OpCode == 34 then -- TFORLOOP (Lua generic for loop handler instruction)
 				local A        = Instr.A;
 				local C        = Instr.C;
 				local A2       = A + 2;
@@ -508,7 +508,7 @@ local function WrapLuaFunction(State, Environment, Upvals)
 				else
 					PC = PC + Instr.B;
 				end;
-			elseif OpCode == 35 then -- SETLIST
+			elseif OpCode == 35 then -- SETLIST (Set a range of register fields into a list)
 				local A = Instr.A;
 				local B = Instr.B;
 				
