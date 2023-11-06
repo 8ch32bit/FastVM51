@@ -16,10 +16,6 @@ local typeof = typeof or type;
 
 local bit32 = require('bit'); -- comment out if running in Lua 5.2/Luau/LuaJIT
 
-local function dP(...)
-	if DEBUG then print(...); end; return ...;
-end;
-
 --[[-----------------------------------------------------------------------
 	--* Libraries/Other variables and functions
 --------------------------------------------------------------------------]]
@@ -32,6 +28,8 @@ local String_byte = string.byte;
 local Table_pack   = table.pack;
 local Table_insert = table.insert;
 local Table_unpack = table.unpack;
+
+local BitwiseAnd = bit32.band;
 
 local function EXTRACT_BITS(x, Field, Width)
 	local Extracted = (x / (2 ^ Field)) % (2 ^ Width);
@@ -133,39 +131,6 @@ local function GrabFloat64(Source) -- This function was technically still writte
 	return (Normal + (Mantissa / 4503599627370496)) * (Sign * (2 ^ (Exponent - 1023)))
 end;
 
---[[local function GrabFloat64(Source) -- My own take on float extraction (returned incorrect results, very buggy)
-	local Mantissa = 0;
-	local Exponent = 0;
-	local Sign     = 0;
-	local Normal   = 1;
-
-	local X = GrabBits32(Source);
-	local Y = GrabBits32(Source);
-
-	--local Mantissa = X + Bit32_extract(Y, 1, 20);
-
-	Mantissa, Exponent, Sign = X + Bit32_extract(Y, 1, 20) * 4294967296 , Bit32_extract(Y, 21, 31), (-1) ^ ExtractBit(Y, 32);
-
-	if Mantissa == 0 and Exponent == 0 then
-		return 0;
-	end;
-
-	if Mantissa == 0 and Exponent == 2047 then
-		return Inf;
-	end;
-
-	if Mantissa ~= 0 and Exponent == 2047 then
-		return NaN;
-	end;
-
-	local Condition = Mantissa ~= 0 and Exponent == 0;
-
-	Exponent = (Condition and 1) or Exponent;
-	Normal   = (Condition and 0) or Normal;
-
-	return Normal + (Mantissa / 4503599627370496) * Sign * 2 ^ (Exponent - 1023);
-end;]]
-
 local function GrabFixedLengthString(Source, Len)
 	local Offset = Position + (Len - 1);
 	local Str    = String_sub(Source, Position, Offset);
@@ -177,33 +142,30 @@ end;
 
 local DeserializeLuaBinary; DeserializeLuaBinary = function(Bytecode)
 	assert(typeof(Bytecode) == "string", "Binary must be a string!");
-	assert(dP(GrabFixedLengthString(Bytecode, 4)) == "\27Lua", "Unknown binary!");
-	assert(dP(GrabBits8(Bytecode)) == 81, "Lua version must be 5.1!");
-	assert(dP(GrabBits8(Bytecode)) == 0, "Must be official lua format!");
-	assert(dP(GrabBits8(Bytecode)) == 1, "Must be a little endian bytecode!");
+	
+	assert(GrabFixedLengthString(Bytecode, 4) == "\27Lua", "Lua binary not detected.");
+	assert(GrabFixedLengthString(Bytecode, 2) == "\81\0\1", "Invalid lua bytecode!");
 
-	local INT_SIZE    = dP(GrabBits8(Bytecode));
-	local SIZE_T_SIZE = dP(GrabBits8(Bytecode));
+	local INT_SIZE    = GrabBits8(Bytecode); -- Can be 4 or 8 bytes
+	local SIZE_T_SIZE = GrabBits8(Bytecode); -- Can be 4 or 8 bytes
 
 	assert(INT_SIZE >= 4 and INT_SIZE <= 8, "Int size must be 4 or 8 bytes!");
 	assert(SIZE_T_SIZE >= 4 and SIZE_T_SIZE <= 8, "size_t must be 4 or 8 bytes!");
 
 	GrabInt   = (INT_SIZE == 8) and GrabBits64 or GrabBits32;
 	GrabSizeT = (SIZE_T_SIZE == 8) and GrabBits64 or GrabBits32;
-
-	assert(dP(GrabBits8(Bytecode)) == 4, "Instruction size must be 4 bytes!");
-	assert(dP(GrabBits8(Bytecode)) == 8, "Num size must be 8 bytes!");
-	assert(dP(GrabBits8(Bytecode)) == 0, "Numbers must be floating point!");
-
-	dP(GrabFixedLengthString(Bytecode, GrabBits32(Bytecode))); -- Source name
-
-	dP(GrabInt(Bytecode)); -- First line defined
-	dP(GrabInt(Bytecode)); -- Last line defined
 	
-	dP(GrabBits8(Bytecode)); -- Upvalue amount
-	dP(GrabBits8(Bytecode)); -- Parameter amount
-	dP(GrabBits8(Bytecode)); -- Is vararg
-	dP(GrabBits8(Bytecode)); -- Stack size
+	assert(GrabFixedLengthString(Bytecode, 3) == "\4\8\0", "Invalid lua bytecode!");
+
+	GrabFixedLengthString(Bytecode, GrabSizeT(Bytecode)); -- Source name
+
+	GrabInt(Bytecode); -- First line defined
+	GrabInt(Bytecode); -- Last line defined
+	
+	GrabBits8(Bytecode); -- Upvalue amount
+	GrabBits8(Bytecode); -- Parameter amount
+	GrabBits8(Bytecode); -- Is vararg
+	GrabBits8(Bytecode); -- Stack size
 
 	local State  = {};
 	local Instrs = {};
@@ -224,25 +186,34 @@ local DeserializeLuaBinary; DeserializeLuaBinary = function(Bytecode)
 		local InstrOpMode = OpMode[InstrOpCode];
 		local InstrOpMask = OpMask[InstrOpCode];
 
+		local Signed = InstrOpMode == "AsBx";
+
 		local Instr = {};
 
-		Instr.Signed = InstrOpMode == "AsBx";
+		Instr.Signed = Signed;
 		Instr.OpCode = InstrOpCode;
 		Instr.OpMode = InstrOpMode;
 		Instr.OpMask = InstrOpMask;
 
-		local ArgAValue = InstrBin / 64;
-		ArgAValue = ArgAValue - (ArgAValue % 1); -- Remove decimal points
+		local AVal = InstrBin / 64;
 
-		Instr.A = bit32.band(ArgAValue, 255); -- (InstrBin >> 6) & 255; -- Bit32_extract(InstrBin, 6, 13);;
+		Instr.A = BitwiseAnd(AVal - (AVal % 1), 255); -- (InstrBin >> 6) & 255; -- Bit32_extract(InstrBin, 6, 13);;
 	
 		if InstrOpMode == "ABC" then
-			Instr.B = bit32.band(bit32.rshift(InstrBin, 23), 511); -- (InstrBin >> 23) & 511; -- Bit32_extract(Bin, 25, 32);
-			Instr.C = bit32.band(bit32.rshift(InstrBin, 14), 511); -- (InstrBin >> 14) & 511; -- Bit32_extract(Bin, 14, 24);
-		elseif InstrOpMode == "ABx" then
-			Instr.B = bit32.band(bit32.rshift(InstrBin, 14), 262143); -- (InstrBin >> 14) & 262143; -- Bit32_extract(Bin, 14, 32);
+			local BVal = InstrBin / 8388608;
+			local CVal = InstrBin / 16384;
+			
+			Instr.B = BitwiseAnd(BVal - (BVal % 1), 511); -- (InstrBin >> 23) & 511; -- Bit32_extract(Bin, 25, 32);
+			Instr.C = BitwiseAnd(CVal - (CVal % 1), 511); -- (InstrBin >> 14) & 511; -- Bit32_extract(Bin, 14, 24);
 		else
-			Instr.B = bit32.band(bit32.rshift(InstrBin, 14), 262143) - 131071; -- (InstrBin >> 14) & 262143 - 131071; -- Bit32_extract(Bin, 14, 32) - 131071;
+			local BVal = InstrBin / 16384;
+			local BArg = BitwiseAnd(BVal - (BVal % 1), 262143);
+
+			if Signed then
+				Instr.B = BArg - 131071;
+			else
+				Instr.B = BArg;
+			end;
 		end;
 		
 		Table_insert(Instrs, Instr);
