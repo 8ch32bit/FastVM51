@@ -149,13 +149,13 @@ local DeserializeLuaBinary; DeserializeLuaBinary = function(Bytecode)
 	local INT_SIZE    = GrabBits8(Bytecode); -- Can be 4 or 8 bytes
 	local SIZE_T_SIZE = GrabBits8(Bytecode); -- Can be 4 or 8 bytes
 
+	assert(GrabFixedLengthString(Bytecode, 3) == "\4\8\0", "Invalid lua bytecode!");
+
 	assert(INT_SIZE >= 4 and INT_SIZE <= 8, "Int size must be 4 or 8 bytes!");
 	assert(SIZE_T_SIZE >= 4 and SIZE_T_SIZE <= 8, "size_t must be 4 or 8 bytes!");
 
 	GrabInt   = (INT_SIZE == 8) and GrabBits64 or GrabBits32;
 	GrabSizeT = (SIZE_T_SIZE == 8) and GrabBits64 or GrabBits32;
-	
-	assert(GrabFixedLengthString(Bytecode, 3) == "\4\8\0", "Invalid lua bytecode!");
 
 	GrabFixedLengthString(Bytecode, GrabSizeT(Bytecode)); -- Source name
 
