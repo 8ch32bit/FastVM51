@@ -432,26 +432,26 @@ local function WrapLuaFunction(State, Environment, Upvals)
 
 				return Table_unpack(REGISTER, Instr.A, (B == 0 and TopIndex) or B - 1);
 			elseif OpCode == 32 then -- FORLOOP (For loop handler instruction)
-				local A     = Instr.A;
-				local Start = REGISTER[A];
-				local End   = REGISTER[A + 1];
-				local Step  = REGISTER[A + 2] or 1;
-
-				local Current = Start + Step;
+				local A       = Instr.A;
+				local Current = REGISTER[A] + (REGISTER[A + 2] or 1);
+				
 				REGISTER[A] = Current;
 
-				if Current <= End then
+				if Current <= REGISTER[A + 1] then
 					PC = PC + Instr.B;
 					REGISTER[A + 3] = Current;
 				end;
 			elseif OpCode == 33 then -- FORPREP (Checks if the for-loop arguments are valid and then prepares R(A))
 				local A     = Instr.A;
 				local Start = REGISTER[A];
-				local End   = REGISTER[A + 1];
-				local Step  = REGISTER[A + 2] or 1;
+				local Step  = REGISTER[A + 2];
+				
+				if not Step then
+					Step = 1; REGISTER[A + 2] = Step;
+				end;
 
 				assert(Start, "no for 'initial' value provided");
-				assert(End, "no for 'end' value provided");
+				assert(REGISTER[A + 1], "no for 'end' value provided");
 				assert((Step < 0 and Start > End) or (Start <= End), "for 'initial' cannot be above for 'end'");
 				assert((Step ~= 0), "for 'step' cannot be 0 (infinite loop possible)");
 
@@ -459,23 +459,18 @@ local function WrapLuaFunction(State, Environment, Upvals)
 
 				PC = PC + Instr.B;
 			elseif OpCode == 34 then -- TFORLOOP (Lua generic for loop handler instruction)
-				local A        = Instr.A;
-				local C        = Instr.C;
-				local A2       = A + 2;
-				local Iterator = REGISTER[A];
-				local State    = REGISTER[A + 1];
-				local Index    = REGISTER[A2];
+				local A  = Instr.A;
+				local C  = Instr.C;
+				local A2 = A + 2;
 
-				local Results = Iterator(State, Index);
+				local Results = REGISTER[A](REGISTER[A + 1], REGISTER[A2]);
 
-				for Idx = 1, C, 1 do
-					REGISTER[A + Idx] = Results[Idx];
-				end;
+				MOVETABLETO_REGISTER(Results, A, A + C, 1);
 
-				local RegisterA3 = REGISTER[A + 3];
+				local Value = REGISTER[A + 3];
 
-				if RegisterA3 then
-					REGISTER[A2] = RegisterA3;
+				if Value then
+					REGISTER[A2] = Value;
 				else
 					PC = PC + Instr.B;
 				end;
@@ -490,9 +485,7 @@ local function WrapLuaFunction(State, Environment, Upvals)
 					Start = TopIndex - A;
 				end;
 
-				for Idx = 1, B do
-					List[Offset + Idx] = REGISTER[A + Idx];
-				end;
+				MOVETABLETO_REGISTER(Results, Offset, Offset + B, A); -- Haven't tested, but should work normally
 			elseif OpCode == 36 then -- CLOSE (Not implemented yet)
 
 			elseif OpCode == 37 then -- CLOSURE (Not implemented yet)
